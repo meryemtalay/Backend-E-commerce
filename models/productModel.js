@@ -44,9 +44,7 @@ var productSchema = new mongoose.Schema({
         default:0,
         select: false,
     },
-    images:{
-        type: Array,
-    },
+    images:[],
     color: {
         type:String,
         // enum:['Black','Brown', 'Red']
@@ -55,10 +53,15 @@ var productSchema = new mongoose.Schema({
     ratings: [
         {
             star: Number,
+            comment:String,
             //ObjectId türünde ve User modeline referans verir. (Bu rateleri User yapar)
             postedby:{type: mongoose.Schema.Types.ObjectId, ref: "User"},
         },
-],
+    ],
+    totalrating: {
+        type:String,
+        default:0,
+    }
 },{timestamps:true});
 
 //Export the model

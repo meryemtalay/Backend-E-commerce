@@ -1,5 +1,7 @@
 const { generateToken } = require("../config/jwtToken");
 const User= require("../models/userModel");
+const Product= require("../models/productModel");
+const Cart= require("../models/cartModel");
 require('dotenv').config();
 const crypto=require('crypto')
 const asyncHandler= require("express-async-handler");  
@@ -19,7 +21,6 @@ const createUser=asyncHandler( async(req,res)=> {
     }else {
        throw new Error("User Already Exists");
     }
-
 })
 
 // asyncHandler: Asenkron fonksiyonların hata yönetimini kolaylaştırır. 
@@ -55,8 +56,43 @@ const loginUserCtrl= asyncHandler(async(req,res)=>{
         throw new Error("Invalid Credenticals")
     }
 })
-//Handle refresh token
 
+//admin login
+const loginAdmin= asyncHandler(async(req,res)=>{
+    const {email,password}=req.body;
+    // check if exists
+    const findAdmin=await User.findOne({email})   
+    if(findAdmin.role!=='admin') throw new Error("Not Authorized")
+    if(findAdmin && (await  findAdmin.isPasswordMatched(password))) {
+        const refreshToken=await generateRefreshToken(findAdmin?._id);
+        const updateuser=await User.findByIdAndUpdate(findAdmin.id,
+            {
+                refreshToken:refreshToken,
+            },
+            {
+                new:true
+            });
+        res.cookie('refreshToken',refreshToken,{
+            httpOnly:true,
+            maxAge: 72 * 60 *60 * 1000,
+        })
+
+        res.json({
+            _id: findAdmin?._id,
+            name:findAdmin?.name,
+            email:findAdmin?.email,
+            mobile:findAdmin?.mobile,
+            token:generateToken(findAdmin?._id),
+        })
+    } else{
+        throw new Error("Invalid Credenticals")
+    }
+})
+
+
+
+
+//Handle refresh token
 const handleRefreshToken=asyncHandler(async(req,res)=>{
     const cookie=req.cookies;
     if(!cookie?.refreshToken) throw new Error("No Refresh Token in Cookies");
@@ -99,7 +135,7 @@ const logout=asyncHandler(async(req,res)=>{
 
 //Update a user
 const updatedUser=asyncHandler(async(req,res)=>{
-    console.log(req.user)
+    // console.log(req.user)
     const { _id }=req.user;
     validateMongoDbId(_id);
     try{
@@ -110,6 +146,28 @@ const updatedUser=asyncHandler(async(req,res)=>{
             email: req?.body?.email,
             mobile: req?.body?.mobile,
         },
+        {
+            new:true,
+        }
+    );
+    res.json(updatedUser);
+    }
+    catch(error){
+        throw new Error(error)
+    }
+})
+
+// save user Address
+const saveAdress=asyncHandler(async(req,res,next)=>{
+    const {_id}=req.user;
+    validateMongoDbId(_id);
+
+    try{
+        const updatedUser=await User.findByIdAndUpdate(
+            _id,
+            {
+            address: req?.body?.address,
+            },
         {
             new:true,
         }
@@ -244,4 +302,64 @@ const resetPassword=asyncHandler(async(req,res)=>{
 
 })
 
-module.exports={createUser, loginUserCtrl, getallUser,getaUser,deleteaUser,updatedUser,blockUser,unblockUser, handleRefreshToken,logout ,updatePassword,forgotPasswordToken,resetPassword}
+const getWishlist=asyncHandler(async(req,res)=>{
+    const {_id}=req.user
+    try{
+        const findUser=await User.findById(_id).populate("wishlist")
+        res.json(findUser)
+    }catch(error){
+        throw new Error(error)
+    }
+})
+// DİKKAT
+    const userCart = asyncHandler(async (req, res) => {
+        const { cart } = req.body;
+        const {_id}=req.user;
+
+        validateMongoDbId(_id);
+
+        try {
+          let products = [];
+          const user = await User.findById(_id);
+          // check if user already have product in cart
+          const alreadyExistCart = await Cart.findOne({ orderby: user._id });
+          if (alreadyExistCart) {
+            alreadyExistCart.remove();
+          }
+          for (let i = 0; i < cart.length; i++) {
+            let object = {};
+            object.product = cart[i]._id;
+            object.count = cart[i].count;
+            object.color = cart[i].color;
+            let getPrice = await Product.findById(cart[i]._id).select("price").exec();
+            object.price = getPrice.price;
+            products.push(object);
+          }
+          console.log(products)
+          let cartTotal = 0;
+          for (let i = 0; i < products.length; i++) {
+            cartTotal = cartTotal + products[i].price * products[i].count;
+          }
+          let newCart = await new Cart({
+            products,
+            cartTotal,
+            orderby: user?._id,
+          }).save();
+          res.json(newCart);
+        } catch (error) {
+          throw new Error(error);
+        }
+      });
+
+      const getUserCart=asyncHandler(async(req,res)=>{
+        const {_id}=req.user;
+        validateMongoDbId(_id);
+        try{
+            const cart=await Cart.findOne({orderby:_id})
+            res.json(cart)
+        }catch(error){
+            throw new Error(error)
+        }
+      })
+
+module.exports={createUser, loginUserCtrl, getallUser,getaUser,deleteaUser,updatedUser,blockUser,unblockUser, handleRefreshToken,logout ,updatePassword,forgotPasswordToken,resetPassword,loginAdmin,getWishlist,saveAdress,userCart,getUserCart}
