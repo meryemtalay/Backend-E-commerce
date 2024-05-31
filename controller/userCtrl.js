@@ -2,7 +2,10 @@ const { generateToken } = require("../config/jwtToken");
 const User= require("../models/userModel");
 const Product= require("../models/productModel");
 const Cart= require("../models/cartModel");
+const Coupon= require("../models/couponModel");
+const Order= require("../models/orderModel");
 require('dotenv').config();
+const uniqid=require('uniqid')
 const crypto=require('crypto')
 const asyncHandler= require("express-async-handler");  
 const validateMongoDbId = require("../utils/validateMongodbId");
@@ -311,9 +314,8 @@ const getWishlist=asyncHandler(async(req,res)=>{
         throw new Error(error)
     }
 })
-// DİKKAT
-    const userCart = asyncHandler(async (req, res) => {
-        const { cart } = req.body;
+const userCart = asyncHandler(async (req, res) => {
+        const { cart } = req.body; 
         const {_id}=req.user;
 
         validateMongoDbId(_id);
@@ -324,7 +326,7 @@ const getWishlist=asyncHandler(async(req,res)=>{
           // check if user already have product in cart
           const alreadyExistCart = await Cart.findOne({ orderby: user._id });
           if (alreadyExistCart) {
-            alreadyExistCart.remove();
+            alreadyExistCart.deleteOne();
           }
           for (let i = 0; i < cart.length; i++) {
             let object = {};
@@ -335,11 +337,11 @@ const getWishlist=asyncHandler(async(req,res)=>{
             object.price = getPrice.price;
             products.push(object);
           }
-          console.log(products)
           let cartTotal = 0;
           for (let i = 0; i < products.length; i++) {
             cartTotal = cartTotal + products[i].price * products[i].count;
           }
+
           let newCart = await new Cart({
             products,
             cartTotal,
@@ -349,17 +351,112 @@ const getWishlist=asyncHandler(async(req,res)=>{
         } catch (error) {
           throw new Error(error);
         }
-      });
+});
 
-      const getUserCart=asyncHandler(async(req,res)=>{
+const getUserCart=asyncHandler(async(req,res)=>{
         const {_id}=req.user;
         validateMongoDbId(_id);
         try{
-            const cart=await Cart.findOne({orderby:_id})
+            const cart=await Cart.findOne({orderby:_id}).populate("products.product")
             res.json(cart)
         }catch(error){
             throw new Error(error)
         }
-      })
+})
 
-module.exports={createUser, loginUserCtrl, getallUser,getaUser,deleteaUser,updatedUser,blockUser,unblockUser, handleRefreshToken,logout ,updatePassword,forgotPasswordToken,resetPassword,loginAdmin,getWishlist,saveAdress,userCart,getUserCart}
+const emptyCart=asyncHandler(async(req,res)=>{
+        const {_id}=req.user;
+        validateMongoDbId(_id);
+        try{
+            const user=await User.findOne({_id});
+            // findOneAndRemove fonksiyonu artık Mongoose'da kullanılmadığı için findOneAndDelete kullandım
+            const cart= await Cart.findOneAndDelete({orderby:user._id})
+            res.json(cart)
+        }catch(error){
+            throw new Error(error)
+        }
+})
+
+const applyCoupon=asyncHandler(async(req,res)=>{
+    const {coupon}=req.body;
+    const {_id}=req.user;
+    validateMongoDbId(_id);
+    const validCoupon=await Coupon.findOne({name:coupon});
+    if(validCoupon===null){
+        throw new Error("Invalid Coupon");
+    }
+    const user = await User.findOne({_id});
+    let {cartTotal}=await Cart.findOne({orderby:user._id,}).populate("products.product")
+    let totalAfterDiscount=(cartTotal -(cartTotal* validCoupon.discount)/100).toFixed(2);
+    await Cart.findOneAndUpdate({orderby:user._id},{totalAfterDiscount},{new:true}) ;
+    res.json(totalAfterDiscount);
+})
+
+const createOrder=asyncHandler(async(req,res)=>{
+    const {COD,couponApplied}=req.body; 
+    const {_id}=req.user;
+    validateMongoDbId(_id);
+    try{
+        if(!COD) throw new Error("Create cash order failed");
+        const user= await User.findById(_id);
+        let userCart=await Cart.findOne({orderby:user._id});
+        let finalAmount=0;
+        if(couponApplied && userCart.totalAfterDiscount){
+            finalAmount=userCart.totalAfterDiscount
+        } else{
+            finalAmount= userCart.cartTotal;           
+        }
+
+        let newOrder=await new Order({
+            products:userCart.products,
+            paymentIntent:{
+                id: uniqid(),
+                method: "COD",
+                amount: finalAmount,
+                status:"Cash on Delivery",
+                created: Date.now(),
+                currency:"usd",
+
+            },
+            orderby:user._id,
+            orderStatus: "Cash on Delivery",
+        }).save();
+        let update=userCart.products.map((item)=>{
+            return {
+                updateOne:{
+                    filter:{_id:item.product._id},
+                    update: {$inc: {quantity: -item.count,sold:+item.count }},
+                } 
+            }
+        })
+        const updated=await Product.bulkWrite(update,{});
+        res.json({message: "success"})
+    }catch(error){
+        throw new Error(error)
+    }
+})
+const getOrders=asyncHandler(async(req,res)=>{
+    const {_id}=req.user;
+    validateMongoDbId(_id);
+    try{
+        const userorders=await Order.findOne({orderby:_id}).populate('products.product').exec();
+        res.json(userorders)
+    }catch(error){
+        throw new Error(error)
+    }
+})
+
+const updateOrderStatus=asyncHandler(async(req,res)=>{
+    const {status}=req.body;
+    const {id}=req.params;
+    validateMongoDbId(id);
+    try{
+        const updateOrderStatus=await Order.findByIdAndUpdate(id,{orderStatus:status,paymentIntent:{status:status,}},{new:true})
+        res.json(updateOrderStatus)
+    }catch(error){
+        throw new Error(error)
+    }
+})
+
+
+module.exports={createUser, loginUserCtrl, getallUser,getaUser,deleteaUser,updatedUser,blockUser,unblockUser, handleRefreshToken,logout ,updatePassword,forgotPasswordToken,resetPassword,loginAdmin,getWishlist,saveAdress,userCart,getUserCart,emptyCart,applyCoupon,createOrder,getOrders,updateOrderStatus}
